@@ -31,8 +31,27 @@ class MultiHeadAttention(nn.Module):
                              .view(1, 1, config.block_size, config.block_size))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        pass
+        #B: batch size, T : # tokens, C: embedding size
+        B, T, C = x.size();
+        
+        qkv = self.c_attn(x)
+        q, k, v = qkv.split(C, dim=2)
+        
+        q = q.view(B, T, self.config.n_head, C // self.config.n_head).transpose(1, 2)
+        k = k.view(B, T, self.config.n_head, C // self.config.n_head).transpose(1, 2)
+        v = v.view(B, T, self.config.n_head, C // self.config.n_head).transpose(1, 2)
 
+        att = (q @ k.transpose(-2, -1)) / (k.size(-1) ** 0.5)
+
+        att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float('-inf'))
+        att = F.softmax(att, dim=-1)
+
+        y = att @ v
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+
+        y = self.c_proj(y)
+        return y
+        
 
 class MLP(nn.Module):
     """
@@ -46,7 +65,11 @@ class MLP(nn.Module):
         self.down_projection = nn.Linear(4 * config.n_embd, config.n_embd)  # Down projection back to normal
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        pass
+        x = self.up_projection(x)
+        x = self.gelu(x) # relu:  _/   gelu: _,/   (kinda dips down at ',')
+        x = self.down_projection(x)
+        return x
+        
 
 class Block(nn.Module):
     """
@@ -60,7 +83,9 @@ class Block(nn.Module):
         self.multi_layer_perceptron = MLP(config)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        pass
+        x += self.attention(self.layer_norm_1(x))
+        x += self.multi_layer_perceptron(self.layer_norm_2(x))
+        return x
 
 
 class GPT(nn.Module):
